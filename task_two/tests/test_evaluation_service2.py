@@ -1,21 +1,68 @@
 import pytest
 import requests
 import decimal
+import statistics
 import typing
+import string
 
 import hypothesis
+import hypothesis.strategies
 
 import task_two.evaluation_service
 
 
-@pytest.fixture()
-def default_test_size():
-    return 10
+DEFAULT_TEST_SIZE = 10  # max num. of request objects to throw into each test
+
+# parametrize tests with REST verbs - maybe not necessary, but harmless
+VERB_PARAM = pytest.mark.parametrize('verb', ['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
+
+# use hypothesis to generate some valid random JSON
+JSON_BODY_STRAT = hypothesis.strategies.recursive(
+    hypothesis.strategies.none() | hypothesis.strategies.booleans() | hypothesis.strategies.floats(),
+    lambda children:
+        hypothesis.strategies.dictionaries(
+            hypothesis.strategies.text(string.printable), children, min_size=1, max_size=DEFAULT_TEST_SIZE
+        ),
+    max_leaves=4,
+)
+VERB_STRAT = hypothesis.strategies.sampled_from(['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
+
+# use the json body and REST verbs strategies to generate random requests objects
+@hypothesis.strategies.composite
+def _requests_strat(draw, body=JSON_BODY_STRAT, verb=VERB_STRAT):
+    return requests.Request(draw(verb), 'http://test-url/', draw(body))
+
+
+JSON_REQUEST_STRAT = hypothesis.strategies.lists(
+    elements=_requests_strat(), min_size=DEFAULT_TEST_SIZE, max_size=DEFAULT_TEST_SIZE,
+)
+
+
+def get_service():
+    """Logic for instantiating an EvaluationService for testing (might need mocking in future)"""
+    return task_two.evaluation_service.EvaluationService()
+
+
+def gen_requests(num: int = DEFAULT_TEST_SIZE, verb: str = 'GET', body_iter: typing.Iterable = None):
+    """
+    Utility function for generating request-type objects
+    :param num: how many requests to generate
+    :param verb: idempotent verb (GET, PUT, etc) TODO validate this input
+    :param body_iter: iterable of JSON body data e.g. a hypothesis start to generate valid json
+    :return: generator of requsts.Request objects
+    """
+    body_iter = None if body_iter is None else iter(body_iter)
+    for i in range(num):
+        if body_iter is not None:
+            body = body_iter.__next__()
+        else:
+            body = None
+        yield requests.Request(verb, f'https://test-request/{i}', data=body)
 
 
 @pytest.fixture()
-def get_requests(default_test_size: int):
-    return [requests.Request('GET', f'https://test-get-request/{i}') for i in range(default_test_size)]
+def get_requests():
+    return [r for r in gen_requests()]
 
 
 @pytest.mark.parametrize(
@@ -25,7 +72,6 @@ def test_homogeneous_requests(
         monkeypatch: typing.Any,
         expected_result: str,
         get_requests: typing.List[requests.Request],
-        default_test_size: int,
 ):
     """
     Test a simple happy path to make sure the list of requests are correctly classified by
@@ -52,13 +98,29 @@ def test_homogeneous_requests(
     assert len(expect_empty) == 0, \
         f"{len(expect_empty)} {expected_result} requests incorrectly evaluated"
 
-    assert len(expect_populated) == default_test_size, \
+    assert len(expect_populated) == DEFAULT_TEST_SIZE, \
         f"Some {expected_result} requests are missing from the {expected_result} requests evaluation list: " \
-        f"expected {default_test_size}, got {len(expect_populated)}: \n{expect_populated}"
+        f"expected {DEFAULT_TEST_SIZE}, got {len(expect_populated)}: \n{expect_populated}"
 
 
-@pytest.mark.parametrize('verb', ['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
-@hypothesis.given(score=hypothesis.strategies.floats(min_value=0, max_value=100, exclude_min=True))
+@hypothesis.given(reqs=JSON_REQUEST_STRAT)
+def test_json_processing(
+        monkeypatch: typing.Any,
+        reqs: typing.List[requests.Request],
+):
+    """
+    Test that valid JSON bodies are parsed without error - for speed most tests are
+    written using empty Requests objects
+    """
+    service = task_two.evaluation_service.EvaluationService()
+    monkeypatch.setattr(service.scorer, 'evaluate', (lambda *x, **y: decimal.Decimal(1)))
+    service.evaluate(reqs)
+
+
+@hypothesis.given(
+    verb=VERB_STRAT,
+    score=hypothesis.strategies.decimals(min_value=6.62e-34, max_value=100),
+)
 def test_positive_scores(verb: str, score: float, monkeypatch: typing.Any):  # how to type hint these pytest fixtures?
     """
     Test a substantial range of positive decimals to ensure there are no edge cases
@@ -67,7 +129,7 @@ def test_positive_scores(verb: str, score: float, monkeypatch: typing.Any):  # h
     See:
         https://hypothesis.readthedocs.io/en/latest/index.html
     """
-    service = task_two.evaluation_service.EvaluationService()
+    service = get_service()
     score = decimal.Decimal(score)
     monkeypatch.setattr(service.scorer, 'evaluate', (lambda *x, **y: score))
     evaluation = service.evaluate([requests.Request(verb, 'https://test-get-request/0')])
@@ -75,13 +137,33 @@ def test_positive_scores(verb: str, score: float, monkeypatch: typing.Any):  # h
     assert len(evaluation.anomalous_requests) == 0, f"Score of {score} incorrectly evaluated as anomalous"
 
 
-@pytest.mark.parametrize('verb', ['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
-@hypothesis.given(score=hypothesis.strategies.floats(min_value=-100, max_value=0))
+@hypothesis.given(
+    verb=VERB_STRAT,
+    score=hypothesis.strategies.decimals(min_value=6.62e-34, max_value=100),
+)
+def test_positive_scores(verb: str, score: float, monkeypatch: typing.Any):  # how to type hint these pytest fixtures?
+    """
+    Test a substantial range of positive decimals to ensure there are no edge cases
+    e.g. requests evaluating to anomalous due to precision errors
+
+    See:
+        https://hypothesis.readthedocs.io/en/latest/index.html
+    """
+    service = get_service()
+    score = decimal.Decimal(score)
+    monkeypatch.setattr(service.scorer, 'evaluate', (lambda *x, **y: score))
+    evaluation = service.evaluate([requests.Request(verb, 'https://test-get-request/0')])
+
+    assert len(evaluation.anomalous_requests) == 0, f"Score of {score} incorrectly evaluated as anomalous"
+
+
+@VERB_PARAM
+@hypothesis.given(score=hypothesis.strategies.decimals(min_value=-100, max_value=0))
 def test_negative_scores(verb: str, score: float, monkeypatch: typing.Any):
     """
     Test a substantial range of negative decimals to ensure there are no edge case failures
     """
-    service = task_two.evaluation_service.EvaluationService()
+    service = get_service()
     score = decimal.Decimal(score)
     monkeypatch.setattr(service.scorer, 'evaluate', (lambda *x, **y: score))
     evaluation = service.evaluate([requests.Request(verb, 'https://test-get-request/0')])
@@ -89,7 +171,7 @@ def test_negative_scores(verb: str, score: float, monkeypatch: typing.Any):
     assert len(evaluation.typical_requests) == 0, f"Score of {score} incorrectly evaluated as typical"
 
 
-@pytest.mark.parametrize('verb', ['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
+@VERB_PARAM
 def test_alternating_categories(verb: str, monkeypatch: typing.Any):
     """
     Crudely patch the scorer to alternate between typical + anomalous to test for weird
@@ -97,7 +179,7 @@ def test_alternating_categories(verb: str, monkeypatch: typing.Any):
     """
     n_requests = 10
 
-    service = task_two.evaluation_service.EvaluationService()
+    service = get_service()
     service.scorer.iteration = 0
 
     def alternate(*args, **kwargs):
@@ -115,9 +197,9 @@ def test_alternating_categories(verb: str, monkeypatch: typing.Any):
     assert len(evaluation.typical_requests) == n_requests // 2
 
 
-def test_empty_list():
-    """Passing an empty list shouldn't cause any breaks"""
-    service = task_two.evaluation_service.EvaluationService()
+def test_empty_requests_list():
+    """Passing an empty list of requests shouldn't cause any breaks"""
+    service = get_service()
     evaluation = service.evaluate([])  # object on its own
     assert evaluation.anomalous_requests == []
     assert evaluation.typical_requests == []
@@ -125,8 +207,8 @@ def test_empty_list():
 
 @pytest.mark.parametrize('obj', ['abc', {}, decimal.Decimal])
 def test_unrecognized_objects_raises_type_error(obj: typing.Any, get_requests: typing.List[requests.Request]):
-    """Expect to throw ValueError if a non-request object is passed to evaluate()"""
-    service = task_two.evaluation_service.EvaluationService()
+    """Expect to throw TypeError if a non-request object is passed to evaluate()"""
+    service = get_service()
     with pytest.raises(TypeError):
         service.evaluate([obj])  # object on its own
         service.evaluate(get_requests + [obj] + get_requests)  # object amongst genuine requests objects
@@ -134,7 +216,45 @@ def test_unrecognized_objects_raises_type_error(obj: typing.Any, get_requests: t
 
 @pytest.mark.parametrize('score', [None, 'foo'])
 def test_unrecognized_scores_raises_type_error(monkeypatch: typing.Any, score: typing.Any):
-    service = task_two.evaluation_service.EvaluationService()
+    """Expect downstream to break if scorer starts returning the wrong objects"""
+    service = get_service()
     monkeypatch.setattr(service.scorer, 'evaluate', (lambda *x, **y: score))
     with pytest.raises(TypeError):
         service.evaluate([requests.Request('GET', 'https://test-get-request/0')])
+
+
+@hypothesis.given(scores=hypothesis.strategies.lists(
+    hypothesis.strategies.decimals(min_value=-100, max_value=100),
+    min_size=2,
+))
+def test_std_dev_calculation(monkeypatch, scores: typing.Tuple[typing.List[decimal.Decimal]]):
+    """
+    Happy-path test that a range of different scores give the correct std dev result
+    """
+    service = get_service()
+    scores_iter = iter(scores)
+
+    def gen(*args, **kwargs):
+        return scores_iter.__next__()
+
+    monkeypatch.setattr(service.scorer, 'evaluate', gen)
+    evaluation = service.evaluate([r for r in gen_requests(len(scores))])
+
+    assert evaluation.standard_deviation == statistics.stdev(scores)
+
+
+def test_std_dev_one_value(monkeypatch):
+    """Always expect a variance of 0 if N=1"""
+    service = get_service()
+    monkeypatch.setattr(service.scorer, 'evaluate', lambda *x, **y: decimal.Decimal(1))
+    evaluation = service.evaluate([r for r in gen_requests(1)])
+
+    assert evaluation.standard_deviation == 0
+
+
+def test_std_dev_no_values():
+    """No std dev == NaN"""
+    service = get_service()
+    evaluation = service.evaluate([])
+
+    assert evaluation.standard_deviation.is_nan()

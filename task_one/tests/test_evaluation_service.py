@@ -58,7 +58,7 @@ def test_homogeneous_requests(
 
 
 @pytest.mark.parametrize('verb', ['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
-@hypothesis.given(score=hypothesis.strategies.floats(min_value=0, max_value=100, exclude_min=True))
+@hypothesis.given(score=hypothesis.strategies.decimals(min_value=6.62e-34, max_value=100))
 def test_positive_scores(verb: str, score: float, monkeypatch: typing.Any):  # how to type hint these pytest fixtures?
     """
     Test a substantial range of positive decimals to ensure there are no edge cases
@@ -76,7 +76,7 @@ def test_positive_scores(verb: str, score: float, monkeypatch: typing.Any):  # h
 
 
 @pytest.mark.parametrize('verb', ['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
-@hypothesis.given(score=hypothesis.strategies.floats(min_value=-100, max_value=0))
+@hypothesis.given(score=hypothesis.strategies.decimals(min_value=-100, max_value=0))
 def test_negative_scores(verb: str, score: float, monkeypatch: typing.Any):
     """
     Test a substantial range of negative decimals to ensure there are no edge case failures

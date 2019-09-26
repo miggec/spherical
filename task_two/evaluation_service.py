@@ -17,7 +17,7 @@ class EvaluationService(task_one.evaluation_service.EvaluationServiceInterface):
         super().__init__()
         self.scores: typing.List[decimal.Decimal] = []
 
-    def evaluate(self, requests: typing.List[requests_lib.Request]) -> task_one.evaluation.Evaluation:
+    def evaluate(self, requests: typing.List[requests_lib.Request]) -> task_two.evaluation.Evaluation:
         # rather than building up two potentially long lists of objects, and then instantiating a
         # new object with copies of those lists, create a stateful instance here and append to it
         # while processing requests
