@@ -119,29 +119,9 @@ def test_json_processing(
 
 @hypothesis.given(
     verb=VERB_STRAT,
-    score=hypothesis.strategies.decimals(min_value=6.62e-34, max_value=100),
+    score=hypothesis.strategies.decimals(min_value=6.62e-34, allow_infinity=False, allow_nan=False),
 )
-def test_positive_scores(verb: str, score: float, monkeypatch: typing.Any):  # how to type hint these pytest fixtures?
-    """
-    Test a substantial range of positive decimals to ensure there are no edge cases
-    e.g. requests evaluating to anomalous due to precision errors
-
-    See:
-        https://hypothesis.readthedocs.io/en/latest/index.html
-    """
-    service = get_service()
-    score = decimal.Decimal(score)
-    monkeypatch.setattr(service.scorer, 'evaluate', (lambda *x, **y: score))
-    evaluation = service.evaluate([requests.Request(verb, 'https://test-get-request/0')])
-
-    assert len(evaluation.anomalous_requests) == 0, f"Score of {score} incorrectly evaluated as anomalous"
-
-
-@hypothesis.given(
-    verb=VERB_STRAT,
-    score=hypothesis.strategies.decimals(min_value=6.62e-34, max_value=100),
-)
-def test_positive_scores(verb: str, score: float, monkeypatch: typing.Any):  # how to type hint these pytest fixtures?
+def test_typical_scores(verb: str, score: decimal.Decimal, monkeypatch: typing.Any):  # how to type hint these pytest fixtures?
     """
     Test a substantial range of positive decimals to ensure there are no edge cases
     e.g. requests evaluating to anomalous due to precision errors
@@ -158,8 +138,8 @@ def test_positive_scores(verb: str, score: float, monkeypatch: typing.Any):  # h
 
 
 @VERB_PARAM
-@hypothesis.given(score=hypothesis.strategies.decimals(min_value=-100, max_value=0))
-def test_negative_scores(verb: str, score: float, monkeypatch: typing.Any):
+@hypothesis.given(score=hypothesis.strategies.decimals(max_value=0, allow_infinity=False, allow_nan=False))
+def test_anomalous_scores(verb: str, score: decimal.Decimal, monkeypatch: typing.Any):
     """
     Test a substantial range of negative decimals to ensure there are no edge case failures
     """
@@ -224,7 +204,7 @@ def test_unrecognized_scores_raises_type_error(monkeypatch: typing.Any, score: t
 
 
 @hypothesis.given(scores=hypothesis.strategies.lists(
-    hypothesis.strategies.decimals(min_value=-100, max_value=100),
+    hypothesis.strategies.decimals(allow_infinity=False, allow_nan=False),
     min_size=2,
 ))
 def test_std_dev_calculation(monkeypatch, scores: typing.Tuple[typing.List[decimal.Decimal]]):
@@ -243,7 +223,7 @@ def test_std_dev_calculation(monkeypatch, scores: typing.Tuple[typing.List[decim
     assert evaluation.standard_deviation == statistics.stdev(scores)
 
 
-def test_std_dev_one_value(monkeypatch):
+def test_std_dev_one_value(monkeypatch: typing.Any):  # TODO do type stubs exist for this?
     """Always expect a variance of 0 if N=1"""
     service = get_service()
     monkeypatch.setattr(service.scorer, 'evaluate', lambda *x, **y: decimal.Decimal(1))
